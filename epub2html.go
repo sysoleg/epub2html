@@ -1,0 +1,314 @@
+package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"encoding/xml"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/net/html"
+)
+
+const defaultOutputFile = "output.html"
+
+type Metadata struct {
+	Title string `xml:"http://purl.org/dc/elements/1.1/ title"`
+}
+
+type Package struct {
+	XMLName  xml.Name `xml:"package"`
+	Metadata Metadata `xml:"metadata"`
+	Manifest Manifest `xml:"manifest"`
+	Spine    Spine    `xml:"spine"`
+	Version  string   `xml:"version,attr"`
+	UniqueID string   `xml:"unique-identifier,attr"`
+	OpfDir   string
+}
+
+type Manifest struct {
+	Items []Item `xml:"item"`
+}
+
+type Item struct {
+	ID        string `xml:"id,attr"`
+	Href      string `xml:"href,attr"`
+	MediaType string `xml:"media-type,attr"`
+}
+
+type Spine struct {
+	Toc      string    `xml:"toc,attr"`
+	Itemrefs []Itemref `xml:"itemref"`
+}
+
+type Itemref struct {
+	Idref string `xml:"idref,attr"`
+}
+
+type Container struct {
+	XMLName   xml.Name   `xml:"container"`
+	Rootfiles []Rootfile `xml:"rootfiles>rootfile"`
+}
+
+type Rootfile struct {
+	FullPath  string `xml:"full-path,attr"`
+	MediaType string `xml:"media-type,attr"`
+}
+
+func main() {
+	epubPath := flag.String("epub", "", "Path to the EPUB file")
+	outputPath := flag.String("output", defaultOutputFile, "Path to the output HTML file")
+	flag.Parse()
+
+	if *epubPath == "" {
+		log.Fatal("EPUB file path is required. Use -epub flag.")
+	}
+
+	r, err := zip.OpenReader(*epubPath)
+	if err != nil {
+		log.Fatalf("Failed to open EPUB file: %v", err)
+	}
+	defer r.Close()
+
+	opfPath, err := findOpfPath(r)
+	if err != nil {
+		log.Fatalf("Failed to find OPF file path: %v", err)
+	}
+	if opfPath == "" {
+		log.Fatal("Could not find content.opf path in EPUB.")
+	}
+	log.Printf("Found OPF file: %s", opfPath)
+
+	pkg, err := parseOpf(r, opfPath)
+	if err != nil {
+		log.Fatalf("Failed to parse OPF file %s: %v", opfPath, err)
+	}
+
+	outFile, err := os.Create(*outputPath)
+	if err != nil {
+		log.Fatalf("Failed to create output HTML file: %v", err)
+	}
+	defer outFile.Close()
+
+	title := "Converted EPUB"
+	if pkg.Metadata.Title != "" {
+		title = pkg.Metadata.Title
+	}
+	htmlHeader := fmt.Sprintf("<!DOCTYPE html>\n<html>\n<head>\n<title>%s</title>\n</head>\n<body>\n", html.EscapeString(title))
+	_, err = outFile.WriteString(htmlHeader)
+	if err != nil {
+		log.Fatalf("Failed to write HTML header: %v", err)
+	}
+	combinedHTML, err := processEpubContent(pkg, r)
+	if err != nil {
+		log.Fatalf("Failed to process EPUB content: %v", err)
+	}
+
+	_, err = outFile.WriteString(combinedHTML.String())
+	if err != nil {
+		log.Fatalf("Failed to write combined HTML content: %v", err)
+	}
+
+	_, err = outFile.WriteString("</body>\n</html>\n")
+	if err != nil {
+		log.Fatalf("Failed to write HTML footer: %v", err)
+	}
+
+	log.Printf("Successfully converted EPUB to raw HTML: %s", *outputPath)
+}
+
+func processEpubContent(pkg *Package, r *zip.ReadCloser) (strings.Builder, error) {
+	manifestMap := make(map[string]string)
+	for _, item := range pkg.Manifest.Items {
+		fullHref := filepath.Join(pkg.OpfDir, item.Href)
+		manifestMap[item.ID] = fullHref
+	}
+
+	var combinedHTML strings.Builder
+
+	for _, itemref := range pkg.Spine.Itemrefs {
+		contentFilePath, ok := manifestMap[itemref.Idref]
+		if !ok {
+			log.Printf("Warning: Could not find item with id %s in manifest", itemref.Idref)
+			continue
+		}
+
+		log.Printf("Processing content file: %s", contentFilePath)
+		fileData, err := readZipFile(r, contentFilePath)
+		if err != nil {
+			log.Printf("Warning: Could not read content file %s: %v", contentFilePath, err)
+			continue
+		}
+
+		doc, err := html.Parse(bytes.NewReader(fileData))
+		if err != nil {
+			log.Printf("Warning: Could not parse HTML content from %s: %v", contentFilePath, err)
+			continue
+		}
+
+		extractRawHTML(doc, &combinedHTML) // Write directly to combinedHTML
+		combinedHTML.WriteString("\n<hr />\n")
+	}
+	return combinedHTML, nil
+}
+
+func findOpfPath(r *zip.ReadCloser) (string, error) {
+	for _, f := range r.File {
+		if f.Name == "META-INF/container.xml" {
+			rc, err := f.Open()
+			if err != nil {
+				return "", fmt.Errorf("failed to open container.xml: %w", err)
+			}
+			defer rc.Close()
+
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return "", fmt.Errorf("failed to read container.xml: %w", err)
+			}
+
+			var container Container
+			if err := xml.Unmarshal(data, &container); err != nil {
+				return "", fmt.Errorf("failed to unmarshal container.xml: %w", err)
+			}
+
+			for _, rf := range container.Rootfiles {
+				if rf.MediaType == "application/oebps-package+xml" {
+					return rf.FullPath, nil
+				}
+			}
+		}
+	}
+
+	for _, f := range r.File {
+		if strings.HasSuffix(f.Name, ".opf") && !strings.Contains(f.Name, "/") {
+			return f.Name, nil
+		}
+		if strings.HasSuffix(f.Name, ".opf") && (strings.HasPrefix(f.Name, "OEBPS/") || strings.HasPrefix(f.Name, "OPS/")) {
+			return f.Name, nil
+		}
+	}
+	return "", fmt.Errorf("OPF file path not found in container.xml and no fallback found")
+}
+
+func parseOpf(r *zip.ReadCloser, opfPath string) (*Package, error) {
+	var opfFile *zip.File
+	for _, f := range r.File {
+		if f.Name == opfPath {
+			opfFile = f
+			break
+		}
+	}
+	if opfFile == nil {
+		return nil, fmt.Errorf("OPF file %s not found in archive", opfPath)
+	}
+
+	rc, err := opfFile.Open()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open OPF file %s: %w", opfPath, err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read OPF file %s: %w", opfPath, err)
+	}
+
+	var pkg Package
+	if err := xml.Unmarshal(data, &pkg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal OPF file %s: %w", opfPath, err)
+	}
+	pkg.OpfDir = filepath.Dir(opfPath)
+
+	return &pkg, nil
+}
+
+func readZipFile(r *zip.ReadCloser, filePath string) ([]byte, error) {
+	cleanPath := filepath.Clean(filePath)
+	if strings.HasPrefix(cleanPath, "..") {
+		return nil, fmt.Errorf("invalid path trying to access parent directory: %s", filePath)
+	}
+
+	for _, f := range r.File {
+		if f.Name == cleanPath {
+			rc, err := f.Open()
+			if err != nil {
+				return nil, fmt.Errorf("failed to open %s: %w", cleanPath, err)
+			}
+			defer rc.Close()
+			return io.ReadAll(rc)
+		}
+	}
+	return nil, fmt.Errorf("file %s not found in archive", cleanPath)
+}
+
+func extractRawHTML(n *html.Node, w io.StringWriter) {
+	var findBodyAndExtract func(*html.Node)
+	foundBody := false
+
+	findBodyAndExtract = func(node *html.Node) {
+		if node.Type == html.ElementNode && node.Data == "body" {
+			foundBody = true
+			for c := node.FirstChild; c != nil; c = c.NextSibling {
+				renderNodeRaw(c, w)
+			}
+			return
+		}
+
+		if !foundBody {
+			for c := node.FirstChild; c != nil; c = c.NextSibling {
+				findBodyAndExtract(c)
+				if foundBody {
+					break
+				}
+			}
+		}
+	}
+
+	findBodyAndExtract(n)
+}
+
+func renderNodeRaw(n *html.Node, w io.StringWriter) {
+	switch n.Type {
+	case html.TextNode:
+		w.WriteString(n.Data)
+	case html.ElementNode:
+		tag := n.Data
+		switch tag {
+
+		case "script", "style", "img", "link", "meta", "head", "title", "svg":
+			return
+		}
+
+		var openTag strings.Builder
+		openTag.WriteString("<")
+		openTag.WriteString(tag)
+
+		for _, attr := range n.Attr {
+			if attr.Key == "class" {
+				continue
+			}
+			openTag.WriteString(" ")
+			openTag.WriteString(attr.Key)
+			openTag.WriteString(`="`)
+			openTag.WriteString(html.EscapeString(attr.Val))
+			openTag.WriteString(`"`)
+		}
+		openTag.WriteString(">")
+		w.WriteString(openTag.String())
+
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			renderNodeRaw(c, w)
+		}
+		w.WriteString("</" + tag + ">")
+	case html.CommentNode:
+		return
+	case html.DoctypeNode:
+		return
+	}
+
+}
