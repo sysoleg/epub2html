@@ -1,0 +1,79 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        arch: [amd64, arm64]
+        exclude:
+          - os: windows-latest
+            arch: arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set build environment variables
+        shell: bash
+        run: |
+          OS_NAME=$(echo ${{ matrix.os }} | sed 's/-latest//')
+          ARCH_NAME=${{ matrix.arch }}
+          BINARY_NAME="epub2html-${OS_NAME}-${ARCH_NAME}"
+          ARCHIVE_EXT="tar.gz"
+
+          if [ "$OS_NAME" == "windows" ]; then
+            BINARY_NAME="${BINARY_NAME}.exe"
+            ARCHIVE_EXT="zip"
+          fi
+
+          echo "GOOS=$OS_NAME" >> $GITHUB_ENV
+          echo "GOARCH=$ARCH_NAME" >> $GITHUB_ENV
+          echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
+          echo "ARCHIVE_EXT=$ARCHIVE_EXT" >> $GITHUB_ENV
+
+      - name: Build
+        run: go build -o ${{ env.BINARY_NAME }}
+
+      - name: Archive binary
+        shell: bash
+        run: |
+          if [ "${{ env.ARCHIVE_EXT }}" == "tar.gz" ]; then
+            tar -czf ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }} ${{ env.BINARY_NAME }}
+          elif [ "${{ env.ARCHIVE_EXT }}" == "zip" ]; then
+            zip ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }} ${{ env.BINARY_NAME }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }}
+          path: ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided by GitHub Actions
