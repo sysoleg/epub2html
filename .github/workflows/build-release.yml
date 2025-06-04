@@ -46,7 +46,7 @@ jobs:
           if [ "${{ env.ARCHIVE_EXT }}" == "tar.gz" ]; then
             tar -czf ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }} ${{ env.BINARY_NAME }}
           elif [ "${{ env.ARCHIVE_EXT }}" == "zip" ]; then
-            zip ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }} ${{ env.BINARY_NAME }}
+            7z a ${{ env.BINARY_NAME }}.${{ env.ARCHIVE_EXT }} ${{ env.BINARY_NAME }}
           fi
 
       - name: Upload artifact
