@@ -13,7 +13,7 @@
 
 ## Prerequisites
 
-- Go (version 1.18 or later recommended)
+- Go
 
 ## Installation & Building
 
