@@ -26,7 +26,7 @@ jobs:
         run: |
           OS_NAME=$(echo ${{ matrix.os }} | sed 's/-latest//')
           ARCH_NAME=${{ matrix.arch }}
-          BINARY_NAME="epub2html-${OS_NAME}-${ARCH_NAME}"
+          BINARY_NAME="epub2html-${OS_NAME}"
           ARCHIVE_EXT="tar.gz"
 
           if [ "$OS_NAME" == "windows" ]; then
@@ -34,8 +34,6 @@ jobs:
             ARCHIVE_EXT="zip"
           fi
 
-          echo "GOOS=$OS_NAME" >> $GITHUB_ENV
-          echo "GOARCH=$ARCH_NAME" >> $GITHUB_ENV
           echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
           echo "ARCHIVE_EXT=$ARCHIVE_EXT" >> $GITHUB_ENV
 
