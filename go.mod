@@ -1,4 +1,4 @@
-module epub2html
+module github.com/sysoleg/epub2html
 
 go 1.24.3
 
