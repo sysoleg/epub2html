@@ -8,7 +8,8 @@
 - Reads content documents based on the EPUB spine.
 - Extracts HTML content from the `<body>` of each content document.
 - Combines extracted HTML into a single output file.
-- Strips scripts, styles, images, and other non-content elements to produce "raw" HTML.
+- Embeds images directly into the HTML file using base64 encoding.
+- Strips scripts, styles, and other non-content elements to produce "raw" HTML.
 - Preserves basic HTML structure and attributes of content tags.
 
 ## Prerequisites
@@ -47,7 +48,6 @@
 
 ## Limitations
 
-- **Raw HTML Output:** The primary goal is to extract textual content with basic structure. Complex styling, scripts, and embedded media (like images and videos) are removed.
+- **Raw HTML Output:** The primary goal is to extract textual content with basic structure. Complex styling, scripts, and other embedded media (like videos) are removed.
 - **CSS and Styling:** All CSS styles are stripped. The output HTML will be unstyled.
-- **Image Handling:** Images are currently not processed or included in the output.
 - **Font Embedding:** Embedded fonts are not handled.
