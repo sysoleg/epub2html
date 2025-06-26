@@ -3,11 +3,13 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/xml"
 	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,16 +125,22 @@ func main() {
 }
 
 func processEpubContent(pkg *Package, r *zip.ReadCloser) (strings.Builder, error) {
-	manifestMap := make(map[string]string)
+	manifestIDMap := make(map[string]string)
 	for _, item := range pkg.Manifest.Items {
 		fullHref := filepath.Join(pkg.OpfDir, item.Href)
-		manifestMap[item.ID] = fullHref
+		manifestIDMap[item.ID] = fullHref
+	}
+
+	manifestHrefMap := make(map[string]Item)
+	for _, item := range pkg.Manifest.Items {
+		fullHref := filepath.Join(pkg.OpfDir, item.Href)
+		manifestHrefMap[fullHref] = item
 	}
 
 	var combinedHTML strings.Builder
 
 	for _, itemref := range pkg.Spine.Itemrefs {
-		contentFilePath, ok := manifestMap[itemref.Idref]
+		contentFilePath, ok := manifestIDMap[itemref.Idref]
 		if !ok {
 			log.Printf("Warning: Could not find item with id %s in manifest", itemref.Idref)
 			continue
@@ -151,7 +159,7 @@ func processEpubContent(pkg *Package, r *zip.ReadCloser) (strings.Builder, error
 			continue
 		}
 
-		extractRawHTML(doc, &combinedHTML) // Write directly to combinedHTML
+		extractRawHTML(doc, &combinedHTML, r, contentFilePath, manifestHrefMap)
 		combinedHTML.WriteString("\n<hr />\n")
 	}
 	return combinedHTML, nil
@@ -246,7 +254,7 @@ func readZipFile(r *zip.ReadCloser, filePath string) ([]byte, error) {
 	return nil, fmt.Errorf("file %s not found in archive", cleanPath)
 }
 
-func extractRawHTML(n *html.Node, w io.StringWriter) {
+func extractRawHTML(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentFilePath string, manifestHrefMap map[string]Item) {
 	var findBodyAndExtract func(*html.Node)
 	foundBody := false
 
@@ -254,7 +262,7 @@ func extractRawHTML(n *html.Node, w io.StringWriter) {
 		if node.Type == html.ElementNode && node.Data == "body" {
 			foundBody = true
 			for c := node.FirstChild; c != nil; c = c.NextSibling {
-				renderNodeRaw(c, w)
+				renderNodeRaw(c, w, r, contentFilePath, manifestHrefMap)
 			}
 			return
 		}
@@ -272,7 +280,7 @@ func extractRawHTML(n *html.Node, w io.StringWriter) {
 	findBodyAndExtract(n)
 }
 
-func renderNodeRaw(n *html.Node, w io.StringWriter) {
+func renderNodeRaw(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentFilePath string, manifestHrefMap map[string]Item) {
 	switch n.Type {
 	case html.TextNode:
 		w.WriteString(n.Data)
@@ -280,8 +288,48 @@ func renderNodeRaw(n *html.Node, w io.StringWriter) {
 		tag := n.Data
 		switch tag {
 
-		case "script", "style", "img", "link", "meta", "head", "title", "svg":
+		case "script", "style", "link", "meta", "head", "title", "svg":
 			return
+		}
+
+		if tag == "img" {
+			var src string
+			for i, attr := range n.Attr {
+				if attr.Key == "src" {
+					src = attr.Val
+					// Remove the original src attribute to replace it
+					n.Attr = append(n.Attr[:i], n.Attr[i+1:]...)
+					break
+				}
+			}
+
+			if src != "" {
+				// Resolve the image path relative to the current content file
+				imagePath, err := url.JoinPath(filepath.Dir(contentFilePath), src)
+				if err != nil {
+					log.Printf("Warning: Could not resolve image path for %s: %v", src, err)
+					return
+				}
+
+				imageData, err := readZipFile(r, imagePath)
+				if err != nil {
+					log.Printf("Warning: Could not read image file %s: %v", imagePath, err)
+					return
+				}
+
+				item, ok := manifestHrefMap[imagePath]
+				if !ok {
+					log.Printf("Warning: Could not find manifest item for image %s", imagePath)
+					return
+				}
+				mediaType := item.MediaType
+
+				encodedData := base64.StdEncoding.EncodeToString(imageData)
+				dataURI := fmt.Sprintf("data:%s;base64,%s", mediaType, encodedData)
+
+				// Add the new src attribute with the data URI
+				n.Attr = append(n.Attr, html.Attribute{Key: "src", Val: dataURI})
+			}
 		}
 
 		var openTag strings.Builder
@@ -302,13 +350,15 @@ func renderNodeRaw(n *html.Node, w io.StringWriter) {
 		w.WriteString(openTag.String())
 
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			renderNodeRaw(c, w)
+			renderNodeRaw(c, w, r, contentFilePath, manifestHrefMap)
 		}
-		w.WriteString("</" + tag + ">")
+		if n.FirstChild != nil || tag != "img" { // Self-closing for img if no children
+			w.WriteString("</" + tag + ">")
+		}
+
 	case html.CommentNode:
 		return
 	case html.DoctypeNode:
 		return
 	}
-
 }
