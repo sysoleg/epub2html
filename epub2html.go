@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/xml"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -63,15 +62,17 @@ type Rootfile struct {
 }
 
 func main() {
-	epubPath := flag.String("epub", "", "Path to the EPUB file")
-	outputPath := flag.String("output", defaultOutputFile, "Path to the output HTML file")
-	flag.Parse()
-
-	if *epubPath == "" {
-		log.Fatal("EPUB file path is required. Use -epub flag.")
+	if len(os.Args) < 2 || len(os.Args) > 3 {
+		log.Fatalf("Usage: %s <input.epub> [output.html]", os.Args[0])
 	}
 
-	r, err := zip.OpenReader(*epubPath)
+	epubPath := os.Args[1]
+	outputPath := defaultOutputFile
+	if len(os.Args) == 3 {
+		outputPath = os.Args[2]
+	}
+
+	r, err := zip.OpenReader(epubPath)
 	if err != nil {
 		log.Fatalf("Failed to open EPUB file: %v", err)
 	}
@@ -91,7 +92,7 @@ func main() {
 		log.Fatalf("Failed to parse OPF file %s: %v", opfPath, err)
 	}
 
-	outFile, err := os.Create(*outputPath)
+	outFile, err := os.Create(outputPath)
 	if err != nil {
 		log.Fatalf("Failed to create output HTML file: %v", err)
 	}
@@ -121,10 +122,11 @@ func main() {
 		log.Fatalf("Failed to write HTML footer: %v", err)
 	}
 
-	log.Printf("Successfully converted EPUB to raw HTML: %s", *outputPath)
+	log.Printf("Successfully converted EPUB to raw HTML: %s", outputPath)
 }
 
 func processEpubContent(pkg *Package, r *zip.ReadCloser) (strings.Builder, error) {
+
 	manifestIDMap := make(map[string]string)
 	for _, item := range pkg.Manifest.Items {
 		fullHref := filepath.Join(pkg.OpfDir, item.Href)

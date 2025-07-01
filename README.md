@@ -32,18 +32,18 @@
 ## Usage
 
 ```bash
-./epub2html -epub <path_to_epub_file> -output <path_to_output_html_file>
+./epub2html <path_to_epub_file> [path_to_output_html_file]
 ```
 
-**Flags:**
+**Arguments:**
 
-- `-epub` (required): Path to the input EPUB file.
-- `-output` (optional): Path to the output HTML file. Defaults to `output.html`.
+- `path_to_epub_file` (required): Path to the input EPUB file.
+- `path_to_output_html_file` (optional): Path to the output HTML file. Defaults to `output.html`.
 
 **Example:**
 
 ```bash
-./epub2html -epub mybook.epub -output mybook_converted.html
+./epub2html mybook.epub mybook_converted.html
 ```
 
 ## Limitations
