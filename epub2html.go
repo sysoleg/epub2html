@@ -285,7 +285,7 @@ func extractRawHTML(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentF
 func renderNodeRaw(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentFilePath string, manifestHrefMap map[string]Item) {
 	switch n.Type {
 	case html.TextNode:
-		w.WriteString(n.Data)
+		w.WriteString(html.EscapeString(n.Data))
 	case html.ElementNode:
 		tag := n.Data
 		switch tag {
