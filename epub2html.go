@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -129,13 +129,13 @@ func processEpubContent(pkg *Package, r *zip.ReadCloser) (strings.Builder, error
 
 	manifestIDMap := make(map[string]string)
 	for _, item := range pkg.Manifest.Items {
-		fullHref := filepath.Join(pkg.OpfDir, item.Href)
+		fullHref := joinEpubPath(pkg.OpfDir, item.Href)
 		manifestIDMap[item.ID] = fullHref
 	}
 
 	manifestHrefMap := make(map[string]Item)
 	for _, item := range pkg.Manifest.Items {
-		fullHref := filepath.Join(pkg.OpfDir, item.Href)
+		fullHref := joinEpubPath(pkg.OpfDir, item.Href)
 		manifestHrefMap[fullHref] = item
 	}
 
@@ -238,7 +238,7 @@ func parseOpf(r *zip.ReadCloser, opfPath string) (*Package, error) {
 }
 
 func readZipFile(r *zip.ReadCloser, filePath string) ([]byte, error) {
-	cleanPath := filepath.Clean(filePath)
+	cleanPath := normalizeEpubPath(filePath)
 	if strings.HasPrefix(cleanPath, "..") {
 		return nil, fmt.Errorf("invalid path trying to access parent directory: %s", filePath)
 	}
@@ -254,6 +254,63 @@ func readZipFile(r *zip.ReadCloser, filePath string) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("file %s not found in archive", cleanPath)
+}
+
+// joinEpubPath joins path elements using forward slashes (EPUB standard).
+// Unlike filepath.Join, this always uses forward slashes regardless of OS.
+func joinEpubPath(elem ...string) string {
+	if len(elem) == 0 {
+		return ""
+	}
+	// Filter out empty elements
+	var parts []string
+	for _, e := range elem {
+		if e != "" {
+			parts = append(parts, e)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	result := path.Join(parts...)
+	return normalizeEpubPath(result)
+}
+
+// epubDir returns the directory portion of an EPUB path.
+// Always uses forward slashes.
+func epubDir(epubPath string) string {
+	normalized := normalizeEpubPath(epubPath)
+	dir := path.Dir(normalized)
+	if dir == "." {
+		return ""
+	}
+	return dir
+}
+
+// resolveEpubPath resolves a relative path against a base directory.
+// Handles ".." and "." correctly within EPUB context.
+func resolveEpubPath(base, rel string) string {
+	// Normalize both paths to use forward slashes
+	base = normalizeEpubPath(base)
+	rel = normalizeEpubPath(rel)
+	
+	// Join and clean the path
+	result := path.Join(base, rel)
+	return normalizeEpubPath(result)
+}
+
+// normalizeEpubPath normalizes a path to use forward slashes and cleans it.
+// This ensures consistent path handling across different operating systems.
+func normalizeEpubPath(p string) string {
+	// Replace backslashes with forward slashes
+	p = strings.ReplaceAll(p, "\\", "/")
+	// Clean the path (removes redundant separators, resolves . and ..)
+	p = path.Clean(p)
+	// path.Clean returns "." for empty paths, we want empty string
+	if p == "." {
+		return ""
+	}
+	return p
 }
 
 func extractRawHTML(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentFilePath string, manifestHrefMap map[string]Item) {
@@ -307,11 +364,8 @@ func renderNodeRaw(n *html.Node, w io.StringWriter, r *zip.ReadCloser, contentFi
 
 			if src != "" {
 				// Resolve the image path relative to the current content file
-				imagePath, err := url.JoinPath(filepath.Dir(contentFilePath), src)
-				if err != nil {
-					log.Printf("Warning: Could not resolve image path for %s: %v", src, err)
-					return
-				}
+				contentDir := epubDir(contentFilePath)
+				imagePath := resolveEpubPath(contentDir, src)
 
 				imageData, err := readZipFile(r, imagePath)
 				if err != nil {
